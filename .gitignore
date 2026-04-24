@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# YOLOv8 outputs
+runs/
+results/
+weights/
+*.pt
+*.onnx
+
+# Dataset caches and unnecessary metadata
+*.cache
+dataset/**/*.cache
+*_annotations.coco.json
+
+# Jupyter notebooks
+.ipynb_checkpoints/

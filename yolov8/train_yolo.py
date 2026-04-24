@@ -39,8 +39,33 @@ def train():
     print("  YOLOv8 — Training Safety Helmet Detector")
     print("=" * 50)
 
-    # Load pre-trained YOLOv8 model (downloads automatically)
-    model = YOLO(MODEL_SIZE)
+    # Determine weights: prefer environment override or local files to avoid online download
+    weights_env = os.getenv("YOLO_WEIGHTS")
+    candidates = []
+    if weights_env:
+        candidates.append(weights_env)
+    candidates.extend([MODEL_SIZE, os.path.join("weights", MODEL_SIZE)])
+
+    weights_path = None
+    for p in candidates:
+        if p and os.path.exists(p):
+            weights_path = p
+            break
+
+    if weights_path is None:
+        download_url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt"
+        print("\n❌ No local YOLO weights found. Expected one of:")
+        for c in candidates:
+            print(f"   - {c}")
+        print("\nYour environment appears offline, which prevents Ultralytics from auto-downloading pretrained weights.")
+        print("Options:")
+        print(f"  1) Connect to the internet and re-run the script so it can download {MODEL_SIZE} automatically.")
+        print(f"  2) Manually download the pretrained weights from: {download_url}")
+        print("     and place the file at `weights/yolov8n.pt` or set the environment variable `YOLO_WEIGHTS` to its path.")
+        return
+
+    print(f"Using weights: {weights_path}")
+    model = YOLO(weights_path)
 
     # Train
     results = model.train(
