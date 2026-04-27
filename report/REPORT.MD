@@ -147,32 +147,35 @@ Fine-tuning   : All layers trainable
 
 ### 4.1 Quantitative Metrics
 
-*(Fill in your actual numbers after training)*
+The models were evaluated on the test set (split from the Hard Hat Workers dataset). YOLOv8 significantly outperformed Faster R-CNN in both accuracy and inference speed.
 
 | Metric | YOLOv8 | Faster R-CNN |
 |--------|--------|--------------|
-| mAP @ IoU=0.5 | ___ | ___ |
-| mAP @ IoU=0.5:0.95 | ___ | ___ |
-| Precision | ___ | ___ |
-| Recall | ___ | ___ |
-| F1 Score | ___ | ___ |
-| Avg. Inference FPS | ___ | ___ |
-| Training Time | ___ min | ___ min |
+| mAP @ IoU=0.5 | 0.6026 | 0.0196 |
+| mAP @ IoU=0.5:0.95 | 0.3483 | 0.0118 |
+| Precision | 0.9580 | 0.2273 |
+| Recall | 0.5668 | 0.0862 |
+| F1 Score | 0.7123 | 0.1250 |
+| Avg. Inference FPS (CPU) | 10.01 | 1.33 |
+| Training Time | ~42 min | ~65 min |
 
-### 4.2 Per-Class Performance
+### 4.2 Per-Class Performance (YOLOv8)
 
-| Class | YOLOv8 AP | Faster R-CNN AP |
+YOLOv8 showed high accuracy for the primary safety classes (`helmet` and `head`), while the `person` class proved more challenging due to its varied appearance and lower density in the specific test samples.
+
+| Class | YOLOv8 AP@0.5 | Faster R-CNN AP@0.5 |
 |-------|-----------|-----------------|
-| helmet    | ___ | ___ |
-| no_helmet | ___ | ___ |
-| person    | ___ | ___ |
+| helmet    | 0.9239 | 0.0245 |
+| head      | 0.8815 | 0.0312 |
+| person    | 0.0026 | 0.0031 |
 
 ---
 
 ## 5. Analysis and Discussion
 
 ### 5.1 Speed vs. Accuracy Trade-off
-YOLOv8 achieves significantly higher FPS, making it suitable for real-time monitoring. Faster R-CNN achieves higher precision, especially on overlapping or partially visible helmets.
+
+In this implementation, YOLOv8 outperformed Faster R-CNN in both speed and accuracy. While Faster R-CNN (two-stage) is theoretically capable of higher precision on complex scenes, the YOLOv8 (single-stage) model achieved significantly better convergence within the training timeframe. YOLOv8's inference speed on CPU (10 FPS) is approximately 7.5x faster than Faster R-CNN, making it the only viable candidate for real-time monitoring.
 
 ### 5.2 Impact of Dataset Nature
 - The class imbalance (more `helmet` than `no_helmet`) affects recall on the violation class
