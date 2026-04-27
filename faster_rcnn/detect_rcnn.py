@@ -1,124 +1,294 @@
 """
 ========================================
- Safety Helmet Detection — Faster R-CNN
- Detection on Image / Video / Webcam
+ Safety Helmet Detection — Inference
+ Run this AFTER training is complete
 ========================================
-Run:
-    python detect_rcnn.py --source path/to/image.jpg
-    python detect_rcnn.py --source path/to/video.mp4
-    python detect_rcnn.py --source webcam
+
+Usage:
+    python detect.py --image path/to/photo.jpg
+    python detect.py --image path/to/photo.jpg --threshold 0.5
+    python detect.py --folder path/to/folder/of/images/
 """
 
-import cv2, argparse, time
+import os
+import argparse
 import torch
-import torchvision.transforms as T
-from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
+import torchvision
+from torchvision import transforms
+from torchvision.models.detection import (
+    fasterrcnn_mobilenet_v3_large_fpn,
+    FasterRCNN_MobileNet_V3_Large_FPN_Weights,
+)
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from PIL import Image
-import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
-# ─────────────────────────────────────────
+# -----------------------------------------
 # CONFIG
-# ─────────────────────────────────────────
-MODEL_PATH  = "results/faster_rcnn/best_model.pth"
-NUM_CLASSES = 3 + 1          # helmet, no_helmet, person + background
-CONF_THRESH = 0.6
-DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# -----------------------------------------
 
-CLASS_NAMES  = {1: "helmet", 2: "no_helmet", 3: "person"}
+NUM_CLASSES  = 3 + 1       # head, helmet, person + background
+CLASS_NAMES  = ["__background__", "head", "helmet", "person"]
+DEVICE       = torch.device("cpu")
+IMG_SIZE     = 480
+THRESHOLD    = 0.5          # only show detections above 50% confidence
+
+# Path trained model
+BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH   = os.path.join(BASE_DIR, "faster_rcnn", "results", "best_model.pth")
+OUTPUT_DIR   = os.path.join(BASE_DIR, "faster_rcnn", "results", "detections")
+
+# Colors per class (BGR for drawing)
 CLASS_COLORS = {
-    "helmet"    : (0, 200, 0),
-    "no_helmet" : (0, 0, 220),
-    "person"    : (200, 200, 0),
+    "__background__" : "gray",
+    "head"           : "#378ADD",   # blue   — uncertain
+    "helmet"         : "#1D9E75",   # green  — safe
+    "person"         : "#D85A30",   # orange — no helmet / at risk
 }
 
-def load_model():
-    weights = FasterRCNN_ResNet50_FPN_Weights.DEFAULT
-    model   = fasterrcnn_resnet50_fpn(weights=weights)
-    in_feat = model.roi_heads.box_predictor.cls_score.in_features
-    model.roi_heads.box_predictor = FastRCNNPredictor(in_feat, NUM_CLASSES)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-    model.eval().to(DEVICE)
+# -----------------------------------------
+# MODEL
+# -----------------------------------------
+
+def build_model(num_classes):
+    weights = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT
+    model   = fasterrcnn_mobilenet_v3_large_fpn(weights=weights)
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     return model
 
-transform = T.Compose([T.ToTensor()])
 
-def predict(model, frame_rgb):
-    """Return list of (box, label, conf)."""
-    img_tensor = transform(Image.fromarray(frame_rgb)).to(DEVICE)
+def load_model(model_path):
+    """Load trained weights into the model."""
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            f"Trained model not found at: {model_path}\n"
+            f"Make sure you have run train_rcnn.py first."
+        )
+    model = build_model(NUM_CLASSES)
+    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+    model.to(DEVICE)
+    model.eval()   # switch to detection mode (not training mode)
+    print(f"Model loaded from: {model_path}")
+    return model
+
+
+# -----------------------------------------
+# DETECTION
+# -----------------------------------------
+
+def detect_image(model, image_path, threshold=THRESHOLD):
+    """
+    Run detection on a single image.
+    Returns: original PIL image + detection results dict
+    """
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    # Load and preprocess
+    img_pil = Image.open(image_path).convert("RGB")
+    orig_w, orig_h = img_pil.size
+
+    tf = transforms.Compose([
+        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.ToTensor(),
+    ])
+    img_tensor = tf(img_pil).unsqueeze(0).to(DEVICE)  # add batch dimension
+
+    # Run inference
     with torch.no_grad():
-        output = model([img_tensor])[0]
+        predictions = model(img_tensor)
 
-    detections = []
-    for box, label, score in zip(output["boxes"], output["labels"], output["scores"]):
-        if score >= CONF_THRESH:
-            cls_name = CLASS_NAMES.get(int(label), "unknown")
-            detections.append((box.cpu().numpy(), cls_name, float(score)))
-    return detections
+    pred = predictions[0]
 
-def draw_box(frame, box, label, conf):
-    x1, y1, x2, y2 = map(int, box)
-    color = CLASS_COLORS.get(label, (180, 180, 180))
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    text = f"{label} {conf:.2f}"
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
-    cv2.putText(frame, text, (x1 + 2, y1 - 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    # Filter by confidence threshold
+    keep = pred["scores"] >= threshold
 
-def run_detection(source):
-    print("⏳ Loading Faster R-CNN model…")
-    model = load_model()
-    print("✅ Model loaded. Press Q to quit.\n")
+    results = {
+        "boxes"  : pred["boxes"][keep].cpu().numpy(),
+        "labels" : pred["labels"][keep].cpu().numpy(),
+        "scores" : pred["scores"][keep].cpu().numpy(),
+        "orig_size" : (orig_w, orig_h),
+    }
 
-    if source == "webcam":
-        cap = cv2.VideoCapture(0)
-    else:
-        cap = cv2.VideoCapture(source)
+    return img_pil, results
 
-    fps_list = []
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+def draw_detections(img_pil, results, save_path=None, show=True):
+    """
+    Draw bounding boxes on image and optionally save/show it.
+    """
+    orig_w, orig_h = results["orig_size"]
+    boxes   = results["boxes"]
+    labels  = results["labels"]
+    scores  = results["scores"]
 
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        t0 = time.time()
+    fig, ax = plt.subplots(1, figsize=(12, 8))
+    ax.imshow(img_pil)
 
-        detections     = predict(model, frame_rgb)
-        fps            = 1 / (time.time() - t0 + 1e-6)
-        fps_list.append(fps)
+    # Scale boxes back to original image size
+    scale_x = orig_w / IMG_SIZE
+    scale_y = orig_h / IMG_SIZE
 
-        helmet_count    = 0
-        violation_count = 0
+    helmet_count   = 0
+    no_helmet_count = 0
+    head_count     = 0
 
-        for box, label, conf in detections:
-            draw_box(frame, box, label, conf)
-            if label == "helmet":     helmet_count    += 1
-            if label == "no_helmet":  violation_count += 1
+    for box, label, score in zip(boxes, labels, scores):
+        class_name = CLASS_NAMES[label]
+        color      = CLASS_COLORS.get(class_name, "white")
 
-        status_color = (0, 200, 0) if violation_count == 0 else (0, 0, 220)
-        status_text  = "✔ COMPLIANT" if violation_count == 0 else f"⚠ {violation_count} VIOLATION(S)"
+        # Scale box coordinates back to original image size
+        x1 = box[0] * scale_x
+        y1 = box[1] * scale_y
+        x2 = box[2] * scale_x
+        y2 = box[3] * scale_y
+        w  = x2 - x1
+        h  = y2 - y1
 
-        cv2.rectangle(frame, (0, 0), (340, 80), (0, 0, 0), -1)
-        cv2.putText(frame, f"Helmets: {helmet_count}  |  {status_text}",
-                    (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, status_color, 2)
-        cv2.putText(frame, f"FPS: {fps:.1f}  |  Faster R-CNN",
-                    (8, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        # Draw box
+        rect = patches.Rectangle(
+            (x1, y1), w, h,
+            linewidth=2, edgecolor=color, facecolor="none"
+        )
+        ax.add_patch(rect)
 
-        cv2.imshow("Helmet Detection — Faster R-CNN", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # Draw label
+        label_text = f"{class_name} {score:.0%}"
+        ax.text(
+            x1, y1 - 5,
+            label_text,
+            color="white",
+            fontsize=9,
+            fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor=color, alpha=0.8)
+        )
 
-    cap.release()
-    cv2.destroyAllWindows()
+        # Count per class
+        if class_name == "helmet":
+            helmet_count += 1
+        elif class_name == "person":
+            no_helmet_count += 1
+        elif class_name == "head":
+            head_count += 1
 
-    avg_fps = sum(fps_list) / len(fps_list) if fps_list else 0
-    print(f"\n📊 Average FPS (Faster R-CNN): {avg_fps:.2f}")
+    # Summary title
+    title = (f"✅ Helmets: {helmet_count}   "
+             f"⚠️  No Helmet: {no_helmet_count}   "
+             f"❓ Uncertain: {head_count}")
+    ax.set_title(title, fontsize=13, pad=10,
+                 color="white",
+                 bbox=dict(boxstyle="round", facecolor="#222", alpha=0.8))
+    ax.axis("off")
+    plt.tight_layout()
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved -> {save_path}")
+
+    if show:
+        plt.show()
+
+    plt.close()
+
+    return {
+        "helmet_count"   : helmet_count,
+        "no_helmet_count": no_helmet_count,
+        "head_count"     : head_count,
+        "total"          : len(boxes),
+    }
+
+
+# -----------------------------------------
+# MAIN
+# -----------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Helmet detector inference")
+    parser.add_argument("--image",     type=str, help="Path to a single image")
+    parser.add_argument("--folder",    type=str, help="Path to a folder of images")
+    parser.add_argument("--threshold", type=float, default=THRESHOLD,
+                        help="Confidence threshold (default 0.5)")
+    parser.add_argument("--no-show",   action="store_true",
+                        help="Don't display image, just save")
+    args = parser.parse_args()
+
+    if not args.image and not args.folder:
+        print("ERROR: Please provide --image or --folder")
+        print("  Example: python detect.py --image test.jpg")
+        return
+
+    # Load model once
+    model = load_model(MODEL_PATH)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Single image
+    if args.image:
+        print(f"\nRunning detection on: {args.image}")
+        img_pil, results = detect_image(model, args.image, args.threshold)
+
+        fname     = os.path.splitext(os.path.basename(args.image))[0]
+        save_path = os.path.join(OUTPUT_DIR, f"{fname}_detected.jpg")
+
+        summary = draw_detections(img_pil, results,
+                                  save_path=save_path,
+                                  show=not args.no_show)
+
+        print(f"\n  Results:")
+        print(f"    ✅ Helmets     : {summary['helmet_count']}")
+        print(f"    ⚠️  No helmet   : {summary['no_helmet_count']}")
+        print(f"    ❓ Uncertain   : {summary['head_count']}")
+        print(f"    Total detected : {summary['total']}")
+
+        if summary["no_helmet_count"] > 0:
+            print(f"\n  🚨 ALERT: {summary['no_helmet_count']} person(s) detected WITHOUT a helmet!")
+
+    # Folder of images
+    if args.folder:
+        if not os.path.isdir(args.folder):
+            print(f"ERROR: Folder not found: {args.folder}")
+            return
+
+        exts   = {".jpg", ".jpeg", ".png", ".bmp"}
+        images = [f for f in os.listdir(args.folder)
+                  if os.path.splitext(f)[1].lower() in exts]
+
+        if not images:
+            print(f"No images found in: {args.folder}")
+            return
+
+        print(f"\nRunning detection on {len(images)} images in: {args.folder}\n")
+
+        total_helmets    = 0
+        total_no_helmets = 0
+
+        for fname in images:
+            img_path  = os.path.join(args.folder, fname)
+            save_path = os.path.join(OUTPUT_DIR, f"{os.path.splitext(fname)[0]}_detected.jpg")
+
+            try:
+                img_pil, results = detect_image(model, img_path, args.threshold)
+                summary = draw_detections(img_pil, results,
+                                          save_path=save_path,
+                                          show=False)
+                total_helmets    += summary["helmet_count"]
+                total_no_helmets += summary["no_helmet_count"]
+                print(f"  {fname}: {summary['helmet_count']} helmet(s), "
+                      f"{summary['no_helmet_count']} no-helmet(s)")
+
+            except Exception as e:
+                print(f"  ERROR on {fname}: {e}")
+
+        print(f"\n{'='*50}")
+        print(f"  Folder summary:")
+        print(f"  Total helmets detected    : {total_helmets}")
+        print(f"  Total no-helmets detected : {total_no_helmets}")
+        print(f"  Output saved to           : {OUTPUT_DIR}")
+        print(f"{'='*50}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--source", default="webcam")
-    args = parser.parse_args()
-    run_detection(args.source)
+    main()
