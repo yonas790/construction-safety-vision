@@ -72,12 +72,26 @@ Use the trained models to detect objects in images.
 
 **YOLOv8 Inference:**
 ```bash
+# Detect on a single image
 python yolov8/detect_yolo.py --source path/to/image.jpg
+
+# Detect on a video file
+python yolov8/detect_yolo.py --source path/to/video.mp4
+
+# Real-time detection using webcam
+python yolov8/detect_yolo.py --source webcam
 ```
 
 **Faster R-CNN Inference:**
 ```bash
+# Detect on a single image
 python faster_rcnn/detect_rcnn.py --image path/to/image.jpg
+
+# Detect with custom threshold (e.g., 0.5)
+python faster_rcnn/detect_rcnn.py --image path/to/image.jpg --threshold 0.5
+
+# Detect on a whole folder of images
+python faster_rcnn/detect_rcnn.py --folder dataset/test/images/
 ```
 
 ## Evaluation & Comparison
